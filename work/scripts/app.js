@@ -15,15 +15,16 @@
 
 (function() {
   'use strict';
-
+  
+  // 代表 应用 本身
   var app = {
     isLoading: true,
-    visibleCards: {},
-    selectedCities: [],
+    visibleCards: {}, //
+    selectedCities: [], //选择的城市
     spinner: document.querySelector('.loader'),
-    cardTemplate: document.querySelector('.cardTemplate'),
-    container: document.querySelector('.main'),
-    addDialog: document.querySelector('.dialog-container'),
+    cardTemplate: document.querySelector('.cardTemplate'), //卡片模板
+    container: document.querySelector('.main'), //卡片容器
+    addDialog: document.querySelector('.dialog-container'), //城市选择框
     daysOfWeek: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
   };
 
@@ -31,31 +32,37 @@
   /*****************************************************************************
    *
    * Event listeners for UI elements
-   *
+   * 事件监听器
    ****************************************************************************/
-
+  // 刷新按钮事件
   document.getElementById('butRefresh').addEventListener('click', function() {
     // Refresh all of the forecasts
     app.updateForecasts();
   });
 
+  // 添加按钮事件
   document.getElementById('butAdd').addEventListener('click', function() {
     // Open/show the add new city dialog
     app.toggleAddDialog(true);
   });
 
+  // 弹窗 中 确定 按钮 事件
   document.getElementById('butAddCity').addEventListener('click', function() {
     // Add the newly selected city
     var select = document.getElementById('selectCityToAdd');
     var selected = select.options[select.selectedIndex];
     var key = selected.value;
     var label = selected.textContent;
-    // TODO init the app.selectedCities array here
+    if (!app.selectedCities) {
+      app.selectedCities = [];
+    }
     app.getForecast(key, label);
-    // TODO push the selected city to the array and save here
+    app.selectedCities.push({key: key, label: label});
+    app.saveSelectedCities();
     app.toggleAddDialog(false);
   });
 
+  // 弹窗 中 取消 按钮 事件
   document.getElementById('butAddCancel').addEventListener('click', function() {
     // Close the add new city dialog
     app.toggleAddDialog(false);
@@ -65,10 +72,11 @@
   /*****************************************************************************
    *
    * Methods to update/refresh the UI
-   *
+   * 更新 和 刷新 UI
    ****************************************************************************/
 
   // Toggles the visibility of the add new city dialog.
+  // 控制 添加 城市的 弹窗
   app.toggleAddDialog = function(visible) {
     if (visible) {
       app.addDialog.classList.add('dialog-container--visible');
@@ -79,6 +87,7 @@
 
   // Updates a weather card with the latest weather forecast. If the card
   // doesn't already exist, it's cloned from the template.
+  // 根据 data 更新 页面 卡片
   app.updateForecastCard = function(data) {
     var dataLastUpdated = new Date(data.created);
     var sunrise = data.channel.astronomy.sunrise;
@@ -89,7 +98,7 @@
 
     var card = app.visibleCards[data.key];
     if (!card) {
-      card = app.cardTemplate.cloneNode(true);
+      card = app.cardTemplate.cloneNode(true); // 根据模板创建新卡片
       card.classList.remove('cardTemplate');
       card.querySelector('.location').textContent = data.label;
       card.removeAttribute('hidden');
@@ -150,7 +159,7 @@
   /*****************************************************************************
    *
    * Methods for dealing with the model
-   *
+   * 加载天气数据
    ****************************************************************************/
 
   /*
@@ -166,6 +175,24 @@
     var url = 'https://query.yahooapis.com/v1/public/yql?format=json&q=' +
         statement;
     // TODO add cache logic here
+    if ('caches' in window) {
+      /*
+       * Check if the service worker has already cached this city's weather
+       * data. If the service worker has the data, then display the cached
+       * data while the app fetches the latest data.
+       */
+      caches.match(url).then(function(response) {
+        if (response) {
+          response.json().then(function updateFromCache(json) {
+            var results = json.query.results;
+            results.key = key;
+            results.label = label;
+            results.created = json.query.created;
+            app.updateForecastCard(results);
+          });
+        }
+      });
+    }
 
     // Fetch the latest data.
     var request = new XMLHttpRequest();
@@ -196,7 +223,12 @@
     });
   };
 
-  // TODO add saveSelectedCities function here
+  // add saveSelectedCities function here
+  // 保存用户选择的 city ，用 localStorage
+  app.saveSelectedCities = function() {
+    var selectedCities = JSON.stringify(app.selectedCities);
+    localStorage.selectedCities = selectedCities;
+  };
 
   app.getIconClass = function(weatherCode) {
     // Weather codes: https://developer.yahoo.com/weather/documentation.html#codes
@@ -266,6 +298,8 @@
    * Fake weather data that is presented when the user first uses the app,
    * or when the user has not saved any cities. See startup code for more
    * discussion.
+   * 第一次展示的数据，由服务器根据ip判断地址后 注入。
+   * 免除第一次加载时 再次去请求数据。
    */
   var initialWeatherForecast = {
     key: '2459115',
@@ -303,9 +337,48 @@
     }
   };
   // TODO uncomment line below to test app with fake data
-  //app.updateForecastCard(initialWeatherForecast);
+  // app.updateForecastCard(initialWeatherForecast);
 
   // TODO add startup code here
+  /************************************************************************
+   *
+   * Code required to start the app
+   *
+   * NOTE: To simplify this codelab, we've used localStorage.
+   *   localStorage is a synchronous API and has serious performance
+   *   implications. It should not be used in production applications!
+   *   Instead, check out IDB (https://www.npmjs.com/package/idb) or
+   *   SimpleDB (https://gist.github.com/inexorabletash/c8069c042b734519680c)
+   * 
+   * 初始化：
+   *  如果有添加的城市：请求数据
+   *  如果没有：展示服务器注入的本地数据，添加本地城市到城市里并保存
+   *    ** 只有第一次才展示注入的数据 
+   ************************************************************************/
 
+  app.selectedCities = localStorage.selectedCities;
+  if (app.selectedCities) {
+    app.selectedCities = JSON.parse(app.selectedCities);
+    app.selectedCities.forEach(function(city) {
+      app.getForecast(city.key, city.label);
+    });
+  } else {
+    /* The user is using the app for the first time, or the user has not
+     * saved any cities, so show the user some fake data. A real app in this
+     * scenario could guess the user's location via IP lookup and then inject
+     * that data into the page.
+     */
+    app.updateForecastCard(initialWeatherForecast);
+    app.selectedCities = [
+      {key: initialWeatherForecast.key, label: initialWeatherForecast.label}
+    ];
+    app.saveSelectedCities();
+  }
   // TODO add service worker code here
+  // 注册服务提供者
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker
+             .register('./service-worker.js')
+             .then(function() { console.log('Service Worker Registered'); });
+  }
 })();
